@@ -1,0 +1,136 @@
+//This example show how you can get Authenticated by the NTAG213,215,216 by default the tags are unprotected in order to protect them we need to write 4 different values:
+// Using mfrc522.MIFARE_Ultralight_Write(PageNum, Data, #Databytes))
+//1.- we need to write the 32bit passWord to page 0xE5 !for ntag 213 and 215 page is different refer to nxp documentation!
+//2.- Now Write the 16 bits pACK to the page 0xE6 use the 2 high bytes like this: pACKH + pACKL + 00 + 00 after an authentication the tag will return this secret bytes
+//3.- Now we need to write the first page we want to protect this is a 1 byte data in page 0xE3 we need to write 00 + 00 + 00 + firstPage  all pages after this one are write protected
+// Now WRITE protection is ACTIVATED so we need to get authenticated in order to write the last data
+//4.- Finally we need to write an access record in order to READ protect the card this step is optional only if you want to read protect also write 80 + 00 + 00 + 00 to 0xE4
+//After completeing all these steps you will nee to authentiate first in order to read or write ant page after the first page you selected to protect
+//To disengage proection just write the page (0xE3) to 00 + 00 + 00 + FF that going to remove all protection
+
+#include <SPI.h>
+#include <MFRC522.h>
+
+#define RST_PIN    9   // 
+#define SS_PIN    10    //
+
+MFRC522 mfrc522(SS_PIN, RST_PIN); // Create MFRC522 instance
+
+boolean setPassword(byte passWord[], byte pAck[], byte page, boolean rProt) //Set password and Optionally Read  Protection
+{
+  byte WBuff[] = {0x00,0x00,0x00,0x00};
+  mfrc522.MIFARE_Ultralight_Write(0xE5, passWord, 4); //Write Password
+  WBuff[0] =  pAck[0];
+  WBuff[1] =  pAck[1];
+  mfrc522.MIFARE_Ultralight_Write(0xE6,  WBuff, 4); //Write pAck
+  WBuff[0] =  0x00;
+  WBuff[1] =  0x00;
+  WBuff[2] =  0x00;
+  WBuff[3] =  page;
+  mfrc522.MIFARE_Ultralight_Write(0xE3,  WBuff, 4); //Write First Protected Page
+  if(rProt)
+  {
+    mfrc522.PCD_NTAG216_AUTH(&passWord[0],pAck);  //Authenticate
+    Serial.print("Returned ACK: 0x");
+    Serial.print(pAck[0], HEX);
+    Serial.print(", 0x");
+    Serial.println(pAck[1], HEX);
+    
+    WBuff[0] =  0x80;
+    WBuff[1] =  0x00;
+    WBuff[2] =  0x00;
+    WBuff[3] =  0x00;
+    mfrc522.MIFARE_Ultralight_Write(0xE4,  WBuff, 4); //Set Read Protection
+  }
+
+  Serial.println("Password Set");
+  return true;
+}
+
+boolean removePassword(byte passWord[], byte pAck[]) //Renove Read Protection and Clear password and pAck with 0xFF
+{
+  byte WBuff[] = {0x00,0x00,0x00,0x00};
+
+  mfrc522.PCD_NTAG216_AUTH(&passWord[0], pAck); //Authenticate
+  
+  WBuff[0] = 0x00;
+  WBuff[1] = 0x00;
+  WBuff[2] = 0x00;
+  WBuff[3] = 0xFF;
+  mfrc522.MIFARE_Ultralight_Write(0xE3,  WBuff, 4); //Remove Write Protection
+  
+  WBuff[0] = 0x00;
+  WBuff[1] = 0x00;
+  WBuff[2] = 0x00;
+  WBuff[3] = 0x00;
+  mfrc522.MIFARE_Ultralight_Write(0xE5,  WBuff, 4); //Remove Read protection
+  
+  WBuff[0] = 0xFF;
+  WBuff[1] = 0xFF;
+  WBuff[2] = 0xFF;
+  WBuff[3] = 0xFF;
+  mfrc522.MIFARE_Ultralight_Write(0xE5,  WBuff, 4); //Clear Password 0xFF 0xFF 0xFF 0xFF
+  
+  WBuff[0] =  0xFF;
+  WBuff[1] =  0xFF;
+  WBuff[2] =  0x00;
+  WBuff[3] =  0x00;
+  mfrc522.MIFARE_Ultralight_Write(0xE6,  WBuff, 4); //Clear pAck 0xFF 0xFF
+
+  Serial.println("Password Removed");
+  return true;
+}
+
+boolean validateAuth(byte passWord[], byte pAck[]) //Check that pAck returns what Expected
+{
+  byte returnedPack[] = {0, 0}; //16 bit PassWord ACK returned by the NFCtag
+
+  mfrc522.PCD_NTAG216_AUTH(&passWord[0], returnedPack);
+
+  //Print PassWordACK
+  //Serial.print("Returned ACK: 0x");
+  //Serial.print(returnedPack[0], HEX);
+  //Serial.print(", 0x");
+  //Serial.println(returnedPack[1], HEX);
+
+  if (returnedPack[0] == pAck[0] && returnedPack[1] == pAck[1])
+    return true;
+
+  return false;
+}
+
+void setup() {
+  Serial.begin(9600);   // Initialize serial communications with the PC
+  while (!Serial);    // Do nothing if no serial port is opened (added for Arduinos based on ATMEGA32U4)
+  SPI.begin();      // Init SPI bus
+  mfrc522.PCD_Init();   // Init MFRC522
+  Serial.println(F("Scan PICC to see UID, type, and data blocks..."));
+}
+
+void loop()
+{
+  // Look for new cards
+  if ( ! mfrc522.PICC_IsNewCardPresent())
+    return;
+
+  // Select one of the cards
+  if ( ! mfrc522.PICC_ReadCardSerial())
+    return;
+
+  byte PSWBuff[] = {0x01, 0x02, 0x03, 0x04}; //32 bit PassWord default FFFFFFFF
+  byte pACK[] = {0x42, 0x55}; //16 bit PassWord ACK returned by the NFCtag
+
+  //mfrc522.MIFARE_Ultralight_Write(0x07, PSWBuff, 4);
+
+  //setPassword(PSWBuff, pACK, 0x08, true);
+  //removePassword(PSWBuff, pACK);
+//
+//  if(validateAuth(PSWBuff, pACK))
+//    Serial.println("Password OK");
+//  else
+//    Serial.println("WRONG PASSWORD");
+
+  mfrc522.PICC_DumpMifareUltralightToSerial(); //This is a modifier dunp just cghange the for cicle to < 232 instead of < 16 in order to see all the pages on NTAG216
+
+  delay(3000);
+}
